@@ -30,6 +30,7 @@ const cfg = {
   jikeArchiveScript: resolvePath(process.env.EFREPORT_JIKE_ARCHIVE_SCRIPT || fileEnv.EFREPORT_JIKE_ARCHIVE_SCRIPT || '../JikeScraper/jike-daily-archive.js'),
   outputDir: resolvePath(process.env.EFREPORT_OUTPUT_DIR || fileEnv.EFREPORT_OUTPUT_DIR || 'data/reports'),
   vaultDir: resolvePath(process.env.EFREPORT_VAULT_DIR || fileEnv.EFREPORT_VAULT_DIR || 'data/reports/vault'),
+  reportLogMaxBytes: Number(process.env.EFREPORT_LOG_MAX_BYTES || fileEnv.EFREPORT_LOG_MAX_BYTES || 5 * 1024 * 1024),
   defaultAccounts: splitList(process.env.EFREPORT_DEFAULT_ACCOUNTS || fileEnv.EFREPORT_DEFAULT_ACCOUNTS || 'technical,creative,business,news,research'),
   defaultTopN: Number(process.env.EFREPORT_DEFAULT_TOPN || fileEnv.EFREPORT_DEFAULT_TOPN || 20)
 };
@@ -76,9 +77,24 @@ function writeText(file, text) {
   atomicWriteText(file, text);
 }
 
+function createRunId(prefix = 'run') {
+  return `${prefix}-${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function rotateLogIfNeeded(file, maxBytes) {
+  try {
+    if (!maxBytes || maxBytes <= 0 || !fs.existsSync(file)) return;
+    const st = fs.statSync(file);
+    if (st.size < maxBytes) return;
+    const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+    fs.renameSync(file, `${file}.${stamp}.bak`);
+  } catch (_) {}
+}
+
 function appendLog(event) {
   const file = path.join(cfg.outputDir, 'report-log.jsonl');
   ensureDir(path.dirname(file));
+  rotateLogIfNeeded(file, cfg.reportLogMaxBytes);
   fs.appendFileSync(file, JSON.stringify({ at: new Date().toISOString(), ...event }) + '\n', 'utf8');
 }
 
@@ -112,10 +128,30 @@ function accountDisplayName(account, globalState) {
   return hit ? hit.displayName : account;
 }
 
+function validateEigenArchive(json) {
+  const warnings = [];
+  if (!json || typeof json !== 'object') {
+    warnings.push('archive_not_object_or_missing');
+    return warnings;
+  }
+  if (!Array.isArray(json.items)) warnings.push('items_not_array');
+  if (json.date && typeof json.date === 'string' && !/^\\d{4}-\\d{2}-\\d{2}$/.test(json.date)) warnings.push('date_format_unexpected');
+  if (json.totalItems !== undefined && Number(json.totalItems) < 0) warnings.push('totalItems_negative');
+  return warnings;
+}
+
 function loadArchive(account, date) {
   const file = archivePathFor(account, date);
   const json = readJson(file, null);
-  return { account, file, exists: !!json, archive: json, items: json && Array.isArray(json.items) ? json.items : [] };
+  const warnings = validateEigenArchive(json);
+  return {
+    account,
+    file,
+    exists: !!json,
+    archive: json,
+    items: json && Array.isArray(json.items) ? json.items : [],
+    warnings
+  };
 }
 
 function str(v) {
@@ -377,7 +413,8 @@ function loadItems(date, accounts) {
       exists: arch.exists,
       totalItems: arch.archive ? arch.archive.totalItems : 0,
       heartbeatCount: arch.archive ? arch.archive.heartbeatCount : 0,
-      updatedAt: arch.archive ? arch.archive.updatedAt : null
+      updatedAt: arch.archive ? arch.archive.updatedAt : null,
+      warnings: arch.warnings || []
     });
     for (const item of arch.items) rows.push(normalizeItem(account, displayName, item, date));
   }
@@ -783,11 +820,24 @@ function jikeArchivePath(date) {
   return path.join(cfg.jikeArchiveDir, `${date}-jike-feeds.json`);
 }
 
+function validateJikeArchive(json) {
+  const warnings = [];
+  if (!json || typeof json !== 'object') {
+    warnings.push('archive_not_object_or_missing');
+    return warnings;
+  }
+  if (!Array.isArray(json.items)) warnings.push('items_not_array');
+  if (json.totalItems !== undefined && Number(json.totalItems) < 0) warnings.push('totalItems_negative');
+  if (json.fetchedAt && Number.isNaN(Date.parse(json.fetchedAt))) warnings.push('fetchedAt_invalid');
+  return warnings;
+}
+
 function loadJikeArchive(date) {
   const file = jikeArchivePath(date);
   const json = readJson(file, null);
-  if (!json || !Array.isArray(json.items)) return { exists: false, file, items: [], totalItems: 0 };
-  return { exists: true, file, items: json.items, totalItems: json.totalItems || json.items.length, fetchedAt: json.fetchedAt };
+  const warnings = validateJikeArchive(json);
+  if (!json || !Array.isArray(json.items)) return { exists: false, file, items: [], totalItems: 0, warnings };
+  return { exists: true, file, items: json.items, totalItems: json.totalItems || json.items.length, fetchedAt: json.fetchedAt, warnings };
 }
 
 function normalizeJikeItem(item, date) {
@@ -930,6 +980,7 @@ function loadJikeItems(date, topN = 10) {
 // --- Fusion command ---
 
 function commandFusionBrief(args) {
+  const runId = args.runId || createRunId('fusion');
   const date = args.date || today();
   const jikeTopN = Number(args.jikeTopN || 10);
   const efTopN = Number(args.efTopN || 10);
@@ -1032,8 +1083,15 @@ function commandFusionBrief(args) {
   lines.push('');
 
   const md = lines.join('\n');
+  const inputWarnings = [
+    ...((efData.archives || []).flatMap(a => (a.warnings || []).map(w => ({ source: 'EigenFlux', account: a.account, file: a.file, warning: w })))),
+    ...((jikeData.archive.warnings || []).map(w => ({ source: 'Jike', file: jikeData.archive.file, warning: w })))
+  ];
+
   const result = {
+    runId,
     date,
+    inputWarnings,
     sources: { eigenflux: { totalItems: efData.totalItems, selected: efData.returnedItems }, jike: { totalItems: jikeData.archive.totalItems || 0, selected: jikeData.items.length } },
     resonance,
     totalCandidates: candidates.length,
@@ -1077,6 +1135,7 @@ function commandRenderBrief(args) {
   writeText(htmlFile, htmlOnly);
 
   const result = {
+    runId: data.runId || args.runId || '',
     date,
     inputFile,
     outputFile: mdFile,
@@ -1236,7 +1295,7 @@ function runNodeScript(scriptFile, args = [], options = {}) {
   try { return JSON.parse(out); } catch (_) { return { raw: out }; }
 }
 
-function runJikeArchiveJob(todayDate) {
+function runJikeArchiveJob(todayDate, runId = createRunId('jike-archive')) {
   const script = cfg.jikeArchiveScript;
   if (!fs.existsSync(script)) throw new Error(`Jike archive script not found: ${script}`);
   const out = childProcess.execFileSync(process.execPath, [script], {
@@ -1245,15 +1304,15 @@ function runJikeArchiveJob(todayDate) {
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: 10 * 60 * 1000
   });
-  return { date: todayDate, outputPreview: String(out || '').slice(0, 1200) };
+  return { runId, date: todayDate, outputPreview: String(out || '').slice(0, 1200) };
 }
 
-function runFusionRenderJob(todayDate) {
+function runFusionRenderJob(todayDate, runId = createRunId('fusion-render')) {
   // dataDate is intentionally yesterday: the morning brief published today summarizes yesterday's source window.
   const dataDate = localYesterday();
   const publishDate = todayDate;
-  const fusion = commandFusionBrief({ command: 'EFReportFusionBrief', date: dataDate, writeFile: 'true' });
-  const render = commandRenderBrief({ command: 'EFReportRenderBrief', date: dataDate, displayDate: publishDate, writeFile: 'true' });
+  const fusion = commandFusionBrief({ command: 'EFReportFusionBrief', date: dataDate, writeFile: 'true', runId });
+  const render = commandRenderBrief({ command: 'EFReportRenderBrief', date: dataDate, displayDate: publishDate, writeFile: 'true', runId });
   return {
     dataDate,
     publishDate,
@@ -1263,10 +1322,11 @@ function runFusionRenderJob(todayDate) {
   };
 }
 
-function runPublisherJob(todayDate) {
+function runPublisherJob(todayDate, runId = createRunId('publisher')) {
   const script = path.join(PLUGIN_DIR, 'daily-brief-publisher.js');
   if (!fs.existsSync(script)) throw new Error(`Publisher script not found: ${script}`);
-  return runNodeScript(script, ['--date', todayDate], { cwd: PLUGIN_DIR, timeout: 5 * 60 * 1000 });
+  const detail = runNodeScript(script, ['--date', todayDate], { cwd: PLUGIN_DIR, timeout: 5 * 60 * 1000 });
+  return { runId, ...detail };
 }
 
 async function runSchedulerTick(reason = 'interval') {
@@ -1275,11 +1335,13 @@ async function runSchedulerTick(reason = 'interval') {
 
   schedulerRunning = true;
   const now = new Date();
+  const runId = createRunId(`scheduler-${reason}`);
   const todayDate = localDate(now);
   const nowMin = minutesOfDay(now);
   const state = readSchedulerState();
   state.enabled = true;
   state.intervalMs = SCHEDULER_INTERVAL_MS;
+  state.lastRunId = runId;
 
   const results = [];
 
@@ -1295,7 +1357,7 @@ async function runSchedulerTick(reason = 'interval') {
       if (!shouldRunDailyJob(state, job.id, todayDate, startMin, untilMin, nowMin)) continue;
 
       try {
-        const detail = job.run(todayDate);
+        const detail = { runId, ...job.run(todayDate, runId) };
         markSchedulerJob(state, job.id, todayDate, 'success', detail);
         appendSchedulerHistory(state, { jobId: job.id, status: 'success', reason, detail });
         results.push({ jobId: job.id, status: 'success', detail });
@@ -1313,7 +1375,7 @@ async function runSchedulerTick(reason = 'interval') {
       const alreadyFinal = pubState.lastRunDate === todayDate && (pubState.lastStatus === 'success' || pubState.lastStatus === 'already_published');
       if (!alreadyFinal) {
         try {
-          const detail = runPublisherJob(todayDate);
+          const detail = runPublisherJob(todayDate, runId);
           const status = detail.status === 'success'
             ? 'success'
             : (detail.reason === 'already_published' ? 'already_published' : 'skipped');
@@ -1333,9 +1395,9 @@ async function runSchedulerTick(reason = 'interval') {
       writeSchedulerState(state);
     } catch (e) {
       appendLog({ ok: false, error: String(e && e.stack || e), scope: 'scheduler_state_write' });
-      return { status: 'error', reason, date: todayDate, results, error: String(e && e.message || e) };
+      return { status: 'error', reason, runId, date: todayDate, results, error: String(e && e.message || e) };
     }
-    return { status: 'success', reason, date: todayDate, results };
+    return { status: 'success', reason, runId, date: todayDate, results };
   } finally {
     schedulerRunning = false;
   }

@@ -411,7 +411,13 @@ node daily-brief-publisher.js --date 2026-05-24
 
 
 
-### v0.1.5 可靠性补丁说明
+
+### v0.1.6 观测性与输入契约补丁
+
+- 新增 `runId`，贯穿 scheduler tick、FusionBrief、RenderBrief 与 Publisher detail，方便追踪一次完整流水线。
+- `report-log.jsonl` 增加体积滚动，默认超过 `EFREPORT_LOG_MAX_BYTES=5242880` 时重命名备份。
+- EigenFlux/Jike 输入归档增加轻量 schema warning，FusionBrief 结果会输出 `inputWarnings`，避免数据格式异常静默失败。
+\n### v0.1.5 可靠性补丁说明
 
 为降低无人值守运行风险，v0.1.5 补充以下工程韧性：
 
