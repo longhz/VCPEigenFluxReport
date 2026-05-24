@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
+const childProcess = require('child_process');
 const briefRenderer = require('./daily-brief-renderer');
 
 const PLUGIN_DIR = __dirname;
@@ -1153,6 +1154,233 @@ function commandMorningBrief(args) {
   return ok('VCPEigenFluxReport MorningBrief complete', result);
 }
 
+
+// --- Built-in daily brief scheduler (hybridservice heartbeat) ---
+
+const SCHEDULER_STATE_FILE = path.join(cfg.outputDir, 'scheduler-state.json');
+const SCHEDULER_INTERVAL_MS = Number(process.env.EFREPORT_SCHEDULER_INTERVAL_MS || fileEnv.EFREPORT_SCHEDULER_INTERVAL_MS || 60 * 1000);
+const SCHEDULER_ENABLED = String(process.env.EFREPORT_SCHEDULER_ENABLED || fileEnv.EFREPORT_SCHEDULER_ENABLED || 'true') !== 'false';
+
+let schedulerTimer = null;
+let schedulerRunning = false;
+
+function localDate(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function localYesterday(d = new Date()) {
+  return localDate(new Date(d.getTime() - 24 * 3600 * 1000));
+}
+
+function minutesOfDay(d = new Date()) {
+  return d.getHours() * 60 + d.getMinutes();
+}
+
+function hmToMinutes(hm) {
+  const [h, m] = String(hm).split(':').map(Number);
+  return h * 60 + m;
+}
+
+function readSchedulerState() {
+  return readJson(SCHEDULER_STATE_FILE, { jobs: {}, history: [] }) || { jobs: {}, history: [] };
+}
+
+function writeSchedulerState(state) {
+  state.lastHeartbeatAt = new Date().toISOString();
+  writeJson(SCHEDULER_STATE_FILE, state);
+}
+
+function appendSchedulerHistory(state, event) {
+  if (!Array.isArray(state.history)) state.history = [];
+  state.history.push({ at: new Date().toISOString(), ...event });
+  if (state.history.length > 200) state.history = state.history.slice(-200);
+}
+
+function shouldRunDailyJob(state, jobId, todayDate, startMin, catchUpUntilMin, nowMin) {
+  const job = state.jobs[jobId] || {};
+  if (job.lastRunDate === todayDate && job.lastStatus === 'success') return false;
+  if (nowMin < startMin) return false;
+  if (nowMin > catchUpUntilMin) return false;
+  return true;
+}
+
+function markSchedulerJob(state, jobId, todayDate, status, detail) {
+  state.jobs[jobId] = {
+    lastRunDate: todayDate,
+    lastRunAt: new Date().toISOString(),
+    lastStatus: status,
+    detail: detail || null
+  };
+}
+
+function runNodeScript(scriptFile, args = [], options = {}) {
+  const out = childProcess.execFileSync(process.execPath, [scriptFile, ...args], {
+    cwd: options.cwd || PLUGIN_DIR,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: options.timeout || 10 * 60 * 1000
+  });
+  try { return JSON.parse(out); } catch (_) { return { raw: out }; }
+}
+
+function runJikeArchiveJob(todayDate) {
+  const script = path.resolve(PLUGIN_DIR, '../JikeScraper/jike-daily-archive.js');
+  if (!fs.existsSync(script)) throw new Error(`Jike archive script not found: ${script}`);
+  const out = childProcess.execFileSync(process.execPath, [script], {
+    cwd: path.dirname(script),
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 10 * 60 * 1000
+  });
+  return { date: todayDate, outputPreview: String(out || '').slice(0, 1200) };
+}
+
+function runFusionRenderJob(todayDate) {
+  const dataDate = localYesterday();
+  const publishDate = todayDate;
+  const fusion = commandFusionBrief({ command: 'EFReportFusionBrief', date: dataDate, writeFile: 'true' });
+  const render = commandRenderBrief({ command: 'EFReportRenderBrief', date: dataDate, displayDate: publishDate, writeFile: 'true' });
+  return {
+    dataDate,
+    publishDate,
+    fusionStatus: fusion.status,
+    renderStatus: render.status,
+    renderedFile: render.result && render.result.outputFile
+  };
+}
+
+function runPublisherJob(todayDate) {
+  const script = path.join(PLUGIN_DIR, 'daily-brief-publisher.js');
+  if (!fs.existsSync(script)) throw new Error(`Publisher script not found: ${script}`);
+  return runNodeScript(script, ['--date', todayDate], { cwd: PLUGIN_DIR, timeout: 5 * 60 * 1000 });
+}
+
+async function runSchedulerTick(reason = 'interval') {
+  if (!SCHEDULER_ENABLED) return { status: 'disabled' };
+  if (schedulerRunning) return { status: 'skipped', reason: 'scheduler_running' };
+
+  schedulerRunning = true;
+  const now = new Date();
+  const todayDate = localDate(now);
+  const nowMin = minutesOfDay(now);
+  const state = readSchedulerState();
+  state.enabled = true;
+  state.intervalMs = SCHEDULER_INTERVAL_MS;
+
+  const results = [];
+
+  try {
+    const jobs = [
+      { id: 'jike_archive', start: '01:30', until: '06:00', run: runJikeArchiveJob },
+      { id: 'fusion_render', start: '06:00', until: '11:00', run: runFusionRenderJob }
+    ];
+
+    for (const job of jobs) {
+      const startMin = hmToMinutes(job.start);
+      const untilMin = hmToMinutes(job.until);
+      if (!shouldRunDailyJob(state, job.id, todayDate, startMin, untilMin, nowMin)) continue;
+
+      try {
+        const detail = job.run(todayDate);
+        markSchedulerJob(state, job.id, todayDate, 'success', detail);
+        appendSchedulerHistory(state, { jobId: job.id, status: 'success', reason, detail });
+        results.push({ jobId: job.id, status: 'success', detail });
+      } catch (e) {
+        const detail = { error: String(e && e.stack || e) };
+        markSchedulerJob(state, job.id, todayDate, 'error', detail);
+        appendSchedulerHistory(state, { jobId: job.id, status: 'error', reason, detail });
+        results.push({ jobId: job.id, status: 'error', detail });
+      }
+    }
+
+    // Publisher: after 07:05, keep checking until it publishes or sees already_published.
+    if (nowMin >= hmToMinutes('07:05')) {
+      const pubState = state.jobs.publisher || {};
+      const alreadyFinal = pubState.lastRunDate === todayDate && (pubState.lastStatus === 'success' || pubState.lastStatus === 'already_published');
+      if (!alreadyFinal) {
+        try {
+          const detail = runPublisherJob(todayDate);
+          const status = detail.status === 'success'
+            ? 'success'
+            : (detail.reason === 'already_published' ? 'already_published' : 'skipped');
+          markSchedulerJob(state, 'publisher', todayDate, status, detail);
+          appendSchedulerHistory(state, { jobId: 'publisher', status, reason, detail });
+          results.push({ jobId: 'publisher', status, detail });
+        } catch (e) {
+          const detail = { error: String(e && e.stack || e) };
+          markSchedulerJob(state, 'publisher', todayDate, 'error', detail);
+          appendSchedulerHistory(state, { jobId: 'publisher', status: 'error', reason, detail });
+          results.push({ jobId: 'publisher', status: 'error', detail });
+        }
+      }
+    }
+
+    writeSchedulerState(state);
+    return { status: 'success', reason, date: todayDate, results };
+  } finally {
+    schedulerRunning = false;
+  }
+}
+
+function startScheduler() {
+  if (!SCHEDULER_ENABLED) {
+    appendLog({ ok: true, message: 'VCPEigenFluxReport scheduler disabled' });
+    return;
+  }
+  if (schedulerTimer) return;
+  runSchedulerTick('boot').catch(e => appendLog({ ok: false, error: String(e && e.stack || e), scope: 'scheduler_boot' }));
+  schedulerTimer = setInterval(() => {
+    runSchedulerTick('interval').catch(e => appendLog({ ok: false, error: String(e && e.stack || e), scope: 'scheduler_interval' }));
+  }, SCHEDULER_INTERVAL_MS);
+  appendLog({ ok: true, message: 'VCPEigenFluxReport scheduler started', intervalMs: SCHEDULER_INTERVAL_MS });
+}
+
+function stopScheduler() {
+  if (schedulerTimer) clearInterval(schedulerTimer);
+  schedulerTimer = null;
+  schedulerRunning = false;
+  appendLog({ ok: true, message: 'VCPEigenFluxReport scheduler stopped' });
+}
+
+function commandSchedulerStatus(args = {}) {
+  const state = readSchedulerState();
+  return ok('VCPEigenFluxReport SchedulerStatus complete', {
+    enabled: SCHEDULER_ENABLED,
+    running: !!schedulerTimer,
+    busy: schedulerRunning,
+    intervalMs: SCHEDULER_INTERVAL_MS,
+    stateFile: SCHEDULER_STATE_FILE,
+    state
+  });
+}
+
+async function commandSchedulerTick(args = {}) {
+  const res = await runSchedulerTick(args.reason || 'manual');
+  return ok('VCPEigenFluxReport SchedulerTick complete', res);
+}
+
+async function initialize(context = {}) {
+  startScheduler();
+  return { status: 'success', message: 'VCPEigenFluxReport initialized', schedulerEnabled: SCHEDULER_ENABLED };
+}
+
+async function shutdown() {
+  stopScheduler();
+  return { status: 'success', message: 'VCPEigenFluxReport shutdown complete' };
+}
+
+async function handleToolCall(input = {}) {
+  return handle(input);
+}
+
+async function processToolCall(input = {}) {
+  return handle(input);
+}
+
+
 function commandHealth(args) {
   const date = args.date || today();
   const accounts = getAccounts(args);
@@ -1239,24 +1467,40 @@ async function handle(input) {
       return commandFusionBrief(input);
     case 'EFReportRenderBrief':
       return commandRenderBrief(input);
+    case 'EFReportSchedulerStatus':
+      return commandSchedulerStatus(input);
+    case 'EFReportSchedulerTick':
+      return commandSchedulerTick(input);
     default:
       return err(`Unknown command: ${cmd}`);
   }
 }
 
-const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-let handled = false;
+if (require.main === module) {
+  const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+  let handled = false;
 
-rl.on('line', async (line) => {
-  if (handled) return;
-  handled = true;
-  try {
-    const input = JSON.parse(line);
-    const res = await handle(input);
-    process.stdout.write(JSON.stringify(res));
-  } catch (e) {
-    process.stdout.write(JSON.stringify(err(e)));
-  } finally {
-    process.exit(0);
-  }
-});
+  rl.on('line', async (line) => {
+    if (handled) return;
+    handled = true;
+    try {
+      const input = JSON.parse(line);
+      const res = await handle(input);
+      process.stdout.write(JSON.stringify(res));
+    } catch (e) {
+      process.stdout.write(JSON.stringify(err(e)));
+    } finally {
+      process.exit(0);
+    }
+  });
+} else {
+  module.exports = {
+    initialize,
+    shutdown,
+    handleToolCall,
+    processToolCall,
+    handle,
+    runSchedulerTick,
+    commandSchedulerStatus
+  };
+}

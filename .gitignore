@@ -2,3 +2,6 @@ config.env
 data/
 node_modules/
 *.log
+*.bak_hybrid_*
+plugin-manifest.json.bak_hybrid_*
+eigenflux-report.js.bak_hybrid_*

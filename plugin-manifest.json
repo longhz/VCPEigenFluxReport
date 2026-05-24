@@ -2,16 +2,15 @@
   "manifestVersion": "1.0.0",
   "name": "VCPEigenFluxReport",
   "displayName": "EigenFlux 情报报告与 Obsidian 知识库",
-  "version": "0.1.3",
-  "description": "VCPEigenFlux + JikeScraper 双源消费层插件。读取 VCPEigenFlux 多账号归档与 JikeScraper daily-archive，提供 Inspect、Digest、Daily、Vault、Health、ReviewQueue、MorningBrief、FusionBrief 等命令。v0.1.2: Jike 评分校准（基线38 + 社交信号增强 + 圈子分级 + 噪声惩罚 + 作者先验）、搜索流社交信号修复、三层 Tag 体系、跨源共振检测。本插件不访问 EigenFlux API，不保存 token，不负责采集和对外发布。 v0.1.3: 新增 RenderBrief 固定日报模板渲染命令，将 FusionBrief JSON 自动渲染为稳定 HTML/Markdown 早报。",
+  "version": "0.1.4",
+  "description": "VCPEigenFlux + JikeScraper 双源消费层插件。读取归档数据，提供 Inspect、Digest、Daily、Vault、Health、ReviewQueue、MorningBrief、FusionBrief、RenderBrief 等命令。v0.1.4: 升级为 hybridservice/direct，内置日报心跳调度器，随 VCP 主服务启动自动执行 Jike 归档、FusionBrief+RenderBrief、approval publisher。",
   "author": "Nova & 梦",
-  "pluginType": "synchronous",
+  "pluginType": "hybridservice",
   "entryPoint": {
-    "type": "nodejs",
-    "command": "node eigenflux-report.js"
+    "script": "eigenflux-report.js"
   },
   "communication": {
-    "protocol": "stdio",
+    "protocol": "direct",
     "timeout": 60000
   },
   "configSchema": {
@@ -39,6 +38,16 @@
       "type": "integer",
       "default": 20,
       "description": "Digest 默认 Top N 数量。"
+    },
+    "EFREPORT_SCHEDULER_ENABLED": {
+      "type": "boolean",
+      "default": true,
+      "description": "是否启用 VCPEigenFluxReport 内置日报心跳调度器。"
+    },
+    "EFREPORT_SCHEDULER_INTERVAL_MS": {
+      "type": "integer",
+      "default": 60000,
+      "description": "内置调度器心跳间隔，默认 60 秒。"
     }
   },
   "capabilities": {
@@ -78,7 +87,15 @@
       {
         "commandIdentifier": "EFReportRenderBrief",
         "description": "将 FusionBrief JSON 渲染为固定模板的即刻简报 HTML/Markdown。参数：date 可选 YYYY-MM-DD；vol 可选期号；inputFile 可选；outputDir 可选；outputFile 可选；htmlFile 可选。默认读取 data/reports/fusion-brief/{date}-fusion-brief.json，输出到 data/reports/rendered-brief。"
+      },
+      {
+        "commandIdentifier": "EFReportSchedulerStatus",
+        "description": "查看 VCPEigenFluxReport 内置心跳调度器状态、scheduler-state.json 与最近执行历史。"
+      },
+      {
+        "commandIdentifier": "EFReportSchedulerTick",
+        "description": "手动触发一次内置调度器 tick，用于测试时间窗口、补偿逻辑与 publisher 状态。参数 reason 可选。"
       }
     ]
   }
-}\n
+}

@@ -408,3 +408,112 @@ node daily-brief-publisher.js --date 2026-05-24
 
 - 初版 EigenFlux 只读消费层
 - Inspect / Digest / Daily / Vault / Health 基础命令
+
+
+## v0.1.4：hybridservice 内置心跳调度器
+
+从 v0.1.4 开始，VCPEigenFluxReport 不再依赖 VCPTaskAssistant 派发 Agent 执行确定性 shell 命令，而是升级为 `hybridservice/direct` 插件。
+
+### 启动方式
+
+插件随 VCP 主服务加载：
+
+```text
+VCP 主服务启动
+  ↓
+PluginManager require VCPEigenFluxReport/eigenflux-report.js
+  ↓
+initialize()
+  ↓
+startScheduler()
+  ↓
+每 60 秒执行一次 scheduler tick
+```
+
+对应 manifest：
+
+```json
+{
+  "pluginType": "hybridservice",
+  "entryPoint": {
+    "script": "eigenflux-report.js"
+  },
+  "communication": {
+    "protocol": "direct",
+    "timeout": 60000
+  }
+}
+```
+
+### 调度规则
+
+内置调度器状态文件：
+
+```text
+data/reports/scheduler-state.json
+```
+
+任务窗口：
+
+| jobId | 时间窗口 | 职责 | 防重复策略 |
+|---|---|---|---|
+| `jike_archive` | 01:30 ~ 06:00 | 执行 JikeScraper 夜间归档 | 当天成功后不重复执行 |
+| `fusion_render` | 06:00 ~ 11:00 | 生成昨日数据窗口的 FusionBrief，并渲染今日显示日期的固定模板早报 | 当天成功后不重复执行 |
+| `publisher` | 07:05 之后 | 持续检查今日 approval 文件，存在且未发布时自动发布 | `success` / `already_published` 后当天不再频繁检查 |
+
+### 审批闸门不变
+
+调度器只会自动生成草稿、自动渲染模板、自动检查 publisher。发布仍必须满足：
+
+```json
+{
+  "status": "approved",
+  "published": false
+}
+```
+
+也就是说：
+
+```text
+自动生成草稿
+  ↓
+Nova / 主人审稿
+  ↓
+daily-brief-approve.js 写入 approval
+  ↓
+内置 scheduler 发现 approval
+  ↓
+daily-brief-publisher.js 发布论坛 md
+  ↓
+approval 回写 published:true
+```
+
+Agent 的职责回到审稿、判断与批准；确定性命令由插件心跳负责执行。
+
+### 新增命令
+
+| 命令 | 用途 |
+|---|---|
+| `EFReportSchedulerStatus` | 查看调度器启用状态、运行状态、状态文件与最近执行历史 |
+| `EFReportSchedulerTick` | 手动触发一次 tick，用于测试时间窗口、补偿逻辑和 publisher 状态 |
+
+stdio 调试示例：
+
+```bash
+printf '%s\n' '{"command":"EFReportSchedulerStatus"}' | node eigenflux-report.js
+printf '%s\n' '{"command":"EFReportSchedulerTick","reason":"manual-test"}' | node eigenflux-report.js
+```
+
+### 配置项
+
+```env
+EFREPORT_SCHEDULER_ENABLED=true
+EFREPORT_SCHEDULER_INTERVAL_MS=60000
+```
+
+如需临时关闭内置调度器，可在 `config.env` 中设置：
+
+```env
+EFREPORT_SCHEDULER_ENABLED=false
+```
+
