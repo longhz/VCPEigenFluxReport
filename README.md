@@ -412,6 +412,24 @@ node daily-brief-publisher.js --date 2026-05-24
 
 
 
+
+### v0.1.7 最小烟测脚本
+
+新增 `test-smoke.js`，用于无人值守改造后的快速回归：
+
+```bash
+node test-smoke.js
+```
+
+覆盖范围：
+
+- manifest JSON 与 `hybridservice/direct` 配置；
+- 三个核心 JS 文件语法检查；
+- direct module exports 检查；
+- `EFReportSchedulerStatus` stdio 调用；
+- `EFReportInspect` stdio 调用；
+- publisher `already_published` 幂等检查。
+
 ### v0.1.6 观测性与输入契约补丁
 
 - 新增 `runId`，贯穿 scheduler tick、FusionBrief、RenderBrief 与 Publisher detail，方便追踪一次完整流水线。

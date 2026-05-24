@@ -135,7 +135,7 @@ function validateEigenArchive(json) {
     return warnings;
   }
   if (!Array.isArray(json.items)) warnings.push('items_not_array');
-  if (json.date && typeof json.date === 'string' && !/^\\d{4}-\\d{2}-\\d{2}$/.test(json.date)) warnings.push('date_format_unexpected');
+  if (json.date && typeof json.date === 'string' && !/^\d{4}[-/]\d{2}[-/]\d{2}$/.test(json.date)) warnings.push('date_format_unexpected');
   if (json.totalItems !== undefined && Number(json.totalItems) < 0) warnings.push('totalItems_negative');
   return warnings;
 }
