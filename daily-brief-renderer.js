@@ -7,6 +7,7 @@ const path = require('path');
 const PLUGIN_DIR = __dirname;
 const DEFAULT_INPUT = path.join(PLUGIN_DIR, 'data/reports/fusion-brief');
 const DEFAULT_OUTPUT = path.join(PLUGIN_DIR, 'data/reports/rendered-brief');
+const DEFAULT_INSIGHTS = path.join(PLUGIN_DIR, 'data/reports/insight-overrides');
 
 function today() {
   return new Date().toISOString().slice(0, 10);
@@ -20,9 +21,15 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
-function writeText(file, text) {
+function atomicWriteText(file, text) {
   ensureDir(path.dirname(file));
-  fs.writeFileSync(file, text, 'utf8');
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tmp, text, 'utf8');
+  fs.renameSync(tmp, file);
+}
+
+function writeText(file, text) {
+  atomicWriteText(file, text);
 }
 
 function esc(s) {
@@ -168,6 +175,28 @@ function inferInsight(item) {
   return '这条适合作为线索归档，后续结合来源可信度、可行动价值和社区反馈再决定是否深读。';
 }
 
+
+function normalizeInsightOverrides(overrides) {
+  if (!overrides || typeof overrides !== 'object') return {};
+  const raw = overrides.items || overrides.insights || {};
+  const out = {};
+  for (const [id, value] of Object.entries(raw)) {
+    if (!id) continue;
+    if (typeof value === 'string') out[id] = value;
+    else if (value && typeof value === 'object' && value.insight) out[id] = String(value.insight);
+  }
+  return out;
+}
+
+function getItemInsight(item, opts = {}) {
+  const overrides = normalizeInsightOverrides(opts.insightOverrides || opts.insights || {});
+  const keys = [item && item.id, item && item.item_id, item && item.url, item && item.title].filter(Boolean).map(String);
+  for (const key of keys) {
+    if (overrides[key]) return overrides[key];
+  }
+  return inferInsight(item);
+}
+
 function pickTheme(data) {
   const r = data.resonance || [];
   const hasAgent = r.includes('AI-Agent') || (data.candidates || []).some(x => (x.primaryTags || []).includes('AI-Agent'));
@@ -296,7 +325,7 @@ function renderHtml(data, opts = {}) {
     <p class="jike-source">${esc(sourceBadge(headline))} · ${esc(sourceMeta(headline))}</p>
     <p class="jike-summary">${esc(shortSummary(headline, 210))}</p>
     <div class="jike-insight">
-      <strong>Nova洞察：</strong>${esc(inferInsight(headline))}
+      <strong>Nova洞察：</strong>${esc(getItemInsight(headline, opts))}
     </div>
   </div>` : ''}
 
@@ -314,7 +343,7 @@ function renderHtml(data, opts = {}) {
       <p class="jike-source">${esc(sourceBadge(item))} · ${esc(sourceMeta(item))}</p>
       <p class="jike-summary">${esc(shortSummary(item, 155))}</p>
       <div class="jike-insight">
-        <strong>Nova洞察：</strong>${esc(inferInsight(item))}
+        <strong>Nova洞察：</strong>${esc(getItemInsight(item, opts))}
       </div>
     </div>`).join('\n')}
   </div>
@@ -365,18 +394,23 @@ function main() {
   const data = readJson(input);
   const vol = args.vol || args.volume || '';
   const displayDate = args.displayDate || args['display-date'] || '';
-  const rendered = renderMarkdownPost(data, { vol, title: args.title, displayDate });
+  const insightFile = args.insightFile || args['insight-file'] || path.join(DEFAULT_INSIGHTS, `${date}-nova-insights.json`);
+  const insightOverrides = fs.existsSync(insightFile) ? readJson(insightFile) : null;
+  const renderOpts = { vol, title: args.title, displayDate, insightOverrides };
+  const rendered = renderMarkdownPost(data, renderOpts);
   ensureDir(outputDir);
   const outFile = args.output || path.join(outputDir, `${date}-jike-brief-rendered.md`);
   const htmlOnlyFile = path.join(outputDir, `${date}-jike-brief-rendered.html`);
   writeText(outFile, rendered);
-  writeText(htmlOnlyFile, renderHtml(data, { vol, title: args.title, displayDate }));
+  writeText(htmlOnlyFile, renderHtml(data, renderOpts));
   console.log(JSON.stringify({
     status: 'success',
     date,
     input,
     output: outFile,
     htmlOnly: htmlOnlyFile,
+    insightFile: insightOverrides ? insightFile : null,
+    insightOverridesApplied: !!insightOverrides,
     bytes: Buffer.byteLength(rendered, 'utf8')
   }, null, 2));
 }
@@ -385,4 +419,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { renderHtml, renderMarkdownPost };
+module.exports = { renderHtml, renderMarkdownPost, inferInsight, getItemInsight, normalizeInsightOverrides };

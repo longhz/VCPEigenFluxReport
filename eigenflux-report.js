@@ -1119,14 +1119,16 @@ function commandRenderBrief(args) {
   const vol = args.vol || args.volume || '';
   const inputFile = args.inputFile || path.join(cfg.outputDir, 'fusion-brief', `${date}-fusion-brief.json`);
   const outputDir = args.outputDir || path.join(cfg.outputDir, 'rendered-brief');
+  const insightFile = args.insightFile || args.insight_file || path.join(cfg.outputDir, 'insight-overrides', `${date}-nova-insights.json`);
+  const insightOverrides = fs.existsSync(insightFile) ? readJson(insightFile, null) : null;
   const displayDate = args.displayDate || args.display_date || args.publishDate || date;
   const postTitle = args.title || `[即刻简报] ${displayDate} 科技与AI热点速递 (早报)`;
 
   const data = readJson(inputFile, null);
   if (!data) return err(`FusionBrief JSON not found or invalid: ${inputFile}`);
 
-  const rendered = briefRenderer.renderMarkdownPost(data, { vol, title: postTitle, displayDate });
-  const htmlOnly = briefRenderer.renderHtml(data, { vol, title: postTitle, displayDate });
+  const rendered = briefRenderer.renderMarkdownPost(data, { vol, title: postTitle, displayDate, insightOverrides });
+  const htmlOnly = briefRenderer.renderHtml(data, { vol, title: postTitle, displayDate, insightOverrides });
 
   ensureDir(outputDir);
   const mdFile = args.outputFile || path.join(outputDir, `${date}-jike-brief-rendered.md`);
@@ -1140,6 +1142,8 @@ function commandRenderBrief(args) {
     inputFile,
     outputFile: mdFile,
     htmlFile,
+    insightFile: insightOverrides ? insightFile : null,
+    insightOverridesApplied: !!insightOverrides,
     bytes: Buffer.byteLength(rendered, 'utf8'),
     htmlBytes: Buffer.byteLength(htmlOnly, 'utf8'),
     title: postTitle,

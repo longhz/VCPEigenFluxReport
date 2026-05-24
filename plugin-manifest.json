@@ -2,8 +2,8 @@
   "manifestVersion": "1.0.0",
   "name": "VCPEigenFluxReport",
   "displayName": "EigenFlux 情报报告与 Obsidian 知识库",
-  "version": "0.1.7",
-  "description": "VCPEigenFlux + JikeScraper 双源消费层插件。读取归档数据，提供 Inspect、Digest、Daily、Vault、Health、ReviewQueue、MorningBrief、FusionBrief、RenderBrief 等命令。v0.1.4: 升级为 hybridservice/direct，内置日报心跳调度器，随 VCP 主服务启动自动执行 Jike 归档、FusionBrief+RenderBrief、approval publisher。 v0.1.5: 增加可靠性补丁：关键文件原子写入、publisher approval lock、initialize/shutdown 幂等保护、日期语义固化、Jike 脚本与论坛目录配置化。 v0.1.6: 增加观测性与输入契约补丁：runId 链路追踪、report-log 滚动、EigenFlux/Jike 归档 schema warning。 v0.1.7: 新增 test-smoke.js 最小回归烟测，覆盖 manifest、语法、direct exports、stdio 状态命令、Inspect 与 publisher 幂等。",
+  "version": "0.1.8",
+  "description": "VCPEigenFlux + JikeScraper 双源消费层插件。读取归档数据，提供 Inspect、Digest、Daily、Vault、Health、ReviewQueue、MorningBrief、FusionBrief、RenderBrief 等命令。v0.1.4: 升级为 hybridservice/direct，内置日报心跳调度器，随 VCP 主服务启动自动执行 Jike 归档、FusionBrief+RenderBrief、approval publisher。 v0.1.5: 增加可靠性补丁：关键文件原子写入、publisher approval lock、initialize/shutdown 幂等保护、日期语义固化、Jike 脚本与论坛目录配置化。 v0.1.6: 增加观测性与输入契约补丁：runId 链路追踪、report-log 滚动、EigenFlux/Jike 归档 schema warning。 v0.1.7: 新增 test-smoke.js 最小回归烟测，覆盖 manifest、语法、direct exports、stdio 状态命令、Inspect 与 publisher 幂等。 v0.1.8: 新增 Nova insight-overrides 机制，renderer 可优先使用 Nova 审稿时改写的洞察评论，再回退到规则模板。",
   "author": "Nova & 梦",
   "pluginType": "hybridservice",
   "entryPoint": {

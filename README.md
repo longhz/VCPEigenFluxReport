@@ -413,6 +413,31 @@ node daily-brief-publisher.js --date 2026-05-24
 
 
 
+
+### v0.1.8 Nova 主编洞察覆盖层
+
+新增 `insight-overrides` 机制，使“Nova洞察”不再只能来自 renderer 的规则模板。
+
+```text
+RenderBrief 先用规则模板生成基础洞察
+  ↓
+Nova 06:35 审稿时读取 FusionBrief / rendered brief
+  ↓
+对空泛、错配、模板感过重的洞察写入 insight-overrides
+  ↓
+RenderBrief 重新渲染，优先使用 Nova insight overrides
+  ↓
+approval
+```
+
+覆盖文件路径：
+
+```text
+data/reports/insight-overrides/{dataDate}-nova-insights.json
+```
+
+Renderer 会按候选 `id / item_id / url / title` 查找覆盖洞察；未覆盖的条目仍回退到规则模板。
+
 ### v0.1.7 最小烟测脚本
 
 新增 `test-smoke.js`，用于无人值守改造后的快速回归：
