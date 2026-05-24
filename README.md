@@ -410,7 +410,17 @@ node daily-brief-publisher.js --date 2026-05-24
 - Inspect / Digest / Daily / Vault / Health 基础命令
 
 
-## v0.1.4：hybridservice 内置心跳调度器
+
+### v0.1.5 可靠性补丁说明
+
+为降低无人值守运行风险，v0.1.5 补充以下工程韧性：
+
+- 关键 JSON / Markdown 输出改为 temp + rename 原子写入，降低进程崩溃导致文件半写入的风险。
+- `daily-brief-publisher.js` 增加 approval lock 文件：同一 publishDate 同时只能有一个 publisher 执行。
+- scheduler 明确日期语义：`dataDate` 表示情报数据所属日期，`publishDate/displayDate` 表示论坛展示发布日期。
+- `initialize()` / `shutdown()` 增加幂等保护，适配 hybridservice 热重载或双重 shutdown 场景。
+- Jike 归档脚本和论坛输出目录支持配置覆盖：`EFREPORT_JIKE_ARCHIVE_SCRIPT`、`EFREPORT_FORUM_DIR`。
+\n## v0.1.4：hybridservice 内置心跳调度器
 
 从 v0.1.4 开始，VCPEigenFluxReport 不再依赖 VCPTaskAssistant 派发 Agent 执行确定性 shell 命令，而是升级为 `hybridservice/direct` 插件。
 

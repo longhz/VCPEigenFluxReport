@@ -27,6 +27,7 @@ const fileEnv = loadEnvFile(path.join(PLUGIN_DIR, 'config.env'));
 const cfg = {
   sourceDir: resolvePath(process.env.EFREPORT_SOURCE_DIR || fileEnv.EFREPORT_SOURCE_DIR || '../VCPEigenFlux/data'),
   jikeArchiveDir: resolvePath(process.env.EFREPORT_JIKE_DIR || fileEnv.EFREPORT_JIKE_DIR || '../JikeScraper/data/daily-archive'),
+  jikeArchiveScript: resolvePath(process.env.EFREPORT_JIKE_ARCHIVE_SCRIPT || fileEnv.EFREPORT_JIKE_ARCHIVE_SCRIPT || '../JikeScraper/jike-daily-archive.js'),
   outputDir: resolvePath(process.env.EFREPORT_OUTPUT_DIR || fileEnv.EFREPORT_OUTPUT_DIR || 'data/reports'),
   vaultDir: resolvePath(process.env.EFREPORT_VAULT_DIR || fileEnv.EFREPORT_VAULT_DIR || 'data/reports/vault'),
   defaultAccounts: splitList(process.env.EFREPORT_DEFAULT_ACCOUNTS || fileEnv.EFREPORT_DEFAULT_ACCOUNTS || 'technical,creative,business,news,research'),
@@ -60,14 +61,19 @@ function readJson(file, fallback = null) {
   }
 }
 
-function writeJson(file, data) {
+function atomicWriteText(file, text) {
   ensureDir(path.dirname(file));
-  fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tmp, text, 'utf8');
+  fs.renameSync(tmp, file);
+}
+
+function writeJson(file, data) {
+  atomicWriteText(file, JSON.stringify(data, null, 2));
 }
 
 function writeText(file, text) {
-  ensureDir(path.dirname(file));
-  fs.writeFileSync(file, text, 'utf8');
+  atomicWriteText(file, text);
 }
 
 function appendLog(event) {
@@ -1156,6 +1162,10 @@ function commandMorningBrief(args) {
 
 
 // --- Built-in daily brief scheduler (hybridservice heartbeat) ---
+// Date semantics:
+// - dataDate: the date of source intelligence data being consumed, normally yesterday.
+// - publishDate/displayDate: the visible date of the morning brief, normally today.
+// Scheduler always records both dates in scheduler-state.json detail to avoid silent off-by-one drift.
 
 const SCHEDULER_STATE_FILE = path.join(cfg.outputDir, 'scheduler-state.json');
 const SCHEDULER_INTERVAL_MS = Number(process.env.EFREPORT_SCHEDULER_INTERVAL_MS || fileEnv.EFREPORT_SCHEDULER_INTERVAL_MS || 60 * 1000);
@@ -1227,7 +1237,7 @@ function runNodeScript(scriptFile, args = [], options = {}) {
 }
 
 function runJikeArchiveJob(todayDate) {
-  const script = path.resolve(PLUGIN_DIR, '../JikeScraper/jike-daily-archive.js');
+  const script = cfg.jikeArchiveScript;
   if (!fs.existsSync(script)) throw new Error(`Jike archive script not found: ${script}`);
   const out = childProcess.execFileSync(process.execPath, [script], {
     cwd: path.dirname(script),
@@ -1239,6 +1249,7 @@ function runJikeArchiveJob(todayDate) {
 }
 
 function runFusionRenderJob(todayDate) {
+  // dataDate is intentionally yesterday: the morning brief published today summarizes yesterday's source window.
   const dataDate = localYesterday();
   const publishDate = todayDate;
   const fusion = commandFusionBrief({ command: 'EFReportFusionBrief', date: dataDate, writeFile: 'true' });
@@ -1318,7 +1329,12 @@ async function runSchedulerTick(reason = 'interval') {
       }
     }
 
-    writeSchedulerState(state);
+    try {
+      writeSchedulerState(state);
+    } catch (e) {
+      appendLog({ ok: false, error: String(e && e.stack || e), scope: 'scheduler_state_write' });
+      return { status: 'error', reason, date: todayDate, results, error: String(e && e.message || e) };
+    }
     return { status: 'success', reason, date: todayDate, results };
   } finally {
     schedulerRunning = false;
@@ -1362,12 +1378,22 @@ async function commandSchedulerTick(args = {}) {
   return ok('VCPEigenFluxReport SchedulerTick complete', res);
 }
 
-async function initialize(context = {}) {
+let lifecycleState = 'created';
+
+async function initialize(config = {}, deps = {}) {
+  if (lifecycleState === 'initialized') {
+    return { status: 'success', message: 'VCPEigenFluxReport already initialized', schedulerEnabled: SCHEDULER_ENABLED };
+  }
+  lifecycleState = 'initialized';
   startScheduler();
   return { status: 'success', message: 'VCPEigenFluxReport initialized', schedulerEnabled: SCHEDULER_ENABLED };
 }
 
 async function shutdown() {
+  if (lifecycleState === 'shutdown') {
+    return { status: 'success', message: 'VCPEigenFluxReport already shutdown' };
+  }
+  lifecycleState = 'shutdown';
   stopScheduler();
   return { status: 'success', message: 'VCPEigenFluxReport shutdown complete' };
 }

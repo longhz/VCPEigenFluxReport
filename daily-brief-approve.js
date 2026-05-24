@@ -50,9 +50,15 @@ function readJson(file, fallback = null) {
   }
 }
 
-function writeJson(file, data) {
+function atomicWriteText(file, text) {
   ensureDir(path.dirname(file));
-  fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n', 'utf8');
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tmp, text, 'utf8');
+  fs.renameSync(tmp, file);
+}
+
+function writeJson(file, data) {
+  atomicWriteText(file, JSON.stringify(data, null, 2) + '\n');
 }
 
 function parseArgs(argv) {

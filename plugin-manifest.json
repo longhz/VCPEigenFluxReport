@@ -2,8 +2,8 @@
   "manifestVersion": "1.0.0",
   "name": "VCPEigenFluxReport",
   "displayName": "EigenFlux 情报报告与 Obsidian 知识库",
-  "version": "0.1.4",
-  "description": "VCPEigenFlux + JikeScraper 双源消费层插件。读取归档数据，提供 Inspect、Digest、Daily、Vault、Health、ReviewQueue、MorningBrief、FusionBrief、RenderBrief 等命令。v0.1.4: 升级为 hybridservice/direct，内置日报心跳调度器，随 VCP 主服务启动自动执行 Jike 归档、FusionBrief+RenderBrief、approval publisher。",
+  "version": "0.1.5",
+  "description": "VCPEigenFlux + JikeScraper 双源消费层插件。读取归档数据，提供 Inspect、Digest、Daily、Vault、Health、ReviewQueue、MorningBrief、FusionBrief、RenderBrief 等命令。v0.1.4: 升级为 hybridservice/direct，内置日报心跳调度器，随 VCP 主服务启动自动执行 Jike 归档、FusionBrief+RenderBrief、approval publisher。 v0.1.5: 增加可靠性补丁：关键文件原子写入、publisher approval lock、initialize/shutdown 幂等保护、日期语义固化、Jike 脚本与论坛目录配置化。",
   "author": "Nova & 梦",
   "pluginType": "hybridservice",
   "entryPoint": {
@@ -48,6 +48,16 @@
       "type": "integer",
       "default": 60000,
       "description": "内置调度器心跳间隔，默认 60 秒。"
+    },
+    "EFREPORT_JIKE_ARCHIVE_SCRIPT": {
+      "type": "string",
+      "default": "../JikeScraper/jike-daily-archive.js",
+      "description": "Jike 夜间归档脚本路径。相对路径以 VCPEigenFluxReport 插件目录为基准。"
+    },
+    "EFREPORT_FORUM_DIR": {
+      "type": "string",
+      "default": "../../dailynote/VCP论坛",
+      "description": "publisher 写入 VCP 论坛 Markdown 文件的目录。相对路径以 VCPEigenFluxReport 插件目录为基准。"
     }
   },
   "capabilities": {

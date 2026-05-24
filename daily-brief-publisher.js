@@ -20,9 +20,25 @@ const path = require('path');
 const crypto = require('crypto');
 
 const PLUGIN_DIR = __dirname;
+
+function loadEnvFile(file) {
+  if (!fs.existsSync(file)) return {};
+  const out = {};
+  const text = fs.readFileSync(file, 'utf8');
+  for (const line of text.split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    const i = t.indexOf('=');
+    if (i < 0) continue;
+    out[t.slice(0, i).trim()] = t.slice(i + 1).trim();
+  }
+  return out;
+}
+
+const fileEnv = loadEnvFile(path.join(PLUGIN_DIR, 'config.env'));
 const REPORT_DIR = path.join(PLUGIN_DIR, 'data/reports');
 const APPROVED_DIR = path.join(REPORT_DIR, 'approved-brief');
-const FORUM_DIR = path.resolve(PLUGIN_DIR, '../../dailynote/VCP论坛');
+const FORUM_DIR = path.resolve(String(process.env.EFREPORT_FORUM_DIR || fileEnv.EFREPORT_FORUM_DIR || path.resolve(PLUGIN_DIR, '../../dailynote/VCP论坛')));
 
 function todayLocal() {
   const d = new Date();
@@ -40,9 +56,15 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
-function writeJson(file, data) {
+function atomicWriteText(file, text) {
   ensureDir(path.dirname(file));
-  fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n', 'utf8');
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tmp, text, 'utf8');
+  fs.renameSync(tmp, file);
+}
+
+function writeJson(file, data) {
+  atomicWriteText(file, JSON.stringify(data, null, 2) + '\n');
 }
 
 function parseArgs(argv) {
@@ -126,6 +148,24 @@ function main() {
     return;
   }
 
+  const lockFile = `${approvalFile}.lock`;
+  let lockFd = null;
+  try {
+    lockFd = fs.openSync(lockFile, 'wx');
+  } catch (e) {
+    if (e && e.code === 'EEXIST') {
+      process.stdout.write(JSON.stringify({
+        status: 'skipped',
+        reason: 'publisher_locked',
+        approvalFile,
+        lockFile
+      }, null, 2));
+      return;
+    }
+    throw e;
+  }
+
+  try {
   const approval = readJson(approvalFile);
 
   if (approval.status !== 'approved') {
@@ -173,7 +213,7 @@ function main() {
     throw new Error(`target forum file already exists: ${outputPath}`);
   }
 
-  fs.writeFileSync(outputPath, forumMd, 'utf8');
+  atomicWriteText(outputPath, forumMd);
 
   const nextApproval = {
     ...approval,
@@ -196,6 +236,12 @@ function main() {
     board,
     maid
   }, null, 2));
+  } finally {
+    if (lockFd !== null) {
+      try { fs.closeSync(lockFd); } catch (_) {}
+      try { fs.unlinkSync(lockFile); } catch (_) {}
+    }
+  }
 }
 
 try {
