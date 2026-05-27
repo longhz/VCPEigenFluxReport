@@ -1302,13 +1302,60 @@ function runNodeScript(scriptFile, args = [], options = {}) {
 function runJikeArchiveJob(todayDate, runId = createRunId('jike-archive')) {
   const script = cfg.jikeArchiveScript;
   if (!fs.existsSync(script)) throw new Error(`Jike archive script not found: ${script}`);
-  const out = childProcess.execFileSync(process.execPath, [script], {
+
+  // Keep the historical tech archive unchanged:
+  // data/daily-archive/YYYY-MM-DD-jike-feeds.json is still the only file consumed by the tech brief.
+  const techOut = childProcess.execFileSync(process.execPath, [script, '--profile', 'tech'], {
     cwd: path.dirname(script),
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: 10 * 60 * 1000
   });
-  return { runId, date: todayDate, outputPreview: String(out || '').slice(0, 1200) };
+
+  return {
+    runId,
+    date: todayDate,
+    profile: 'tech',
+    outputPreview: String(techOut || '').slice(0, 1200)
+  };
+}
+
+function runJikeProfileArchiveJob(profile, todayDate, runId = createRunId(`jike-${profile}-archive`)) {
+  const script = cfg.jikeArchiveScript;
+  if (!fs.existsSync(script)) throw new Error(`Jike archive script not found: ${script}`);
+
+  const args = ['--profile', profile];
+
+  // Humanistic sidecar policy:
+  // - literary/emotion need comments because the discussion often carries the real value.
+  // - Keep it small and polite by default: top 3 posts, max 30 comments each, no nested replies.
+  // - Tech remains commentTopN=0 in runJikeArchiveJob, preserving the existing morning brief path.
+  if (profile === 'literary' || profile === 'emotion') {
+    args.push('--commentTopN', '3', '--commentMax', '30', '--includeReplies', 'false');
+    args.push('--minDelayMs', '1200', '--maxDelayMs', '3200');
+  }
+
+  const out = childProcess.execFileSync(process.execPath, [script, ...args], {
+    cwd: path.dirname(script),
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 15 * 60 * 1000
+  });
+  return {
+    runId,
+    date: todayDate,
+    profile,
+    archiveArgs: args,
+    outputPreview: String(out || '').slice(0, 1200)
+  };
+}
+
+function runJikeLiteraryArchiveJob(todayDate, runId = createRunId('jike-literary-archive')) {
+  return runJikeProfileArchiveJob('literary', todayDate, runId);
+}
+
+function runJikeEmotionArchiveJob(todayDate, runId = createRunId('jike-emotion-archive')) {
+  return runJikeProfileArchiveJob('emotion', todayDate, runId);
 }
 
 function runFusionRenderJob(todayDate, runId = createRunId('fusion-render')) {
@@ -1351,7 +1398,12 @@ async function runSchedulerTick(reason = 'interval') {
 
   try {
     const jobs = [
-      { id: 'jike_archive', start: '01:30', until: '06:00', run: runJikeArchiveJob },
+      // Staggered Jike archive jobs:
+      // - tech keeps the earliest slot because the morning tech brief depends on it.
+      // - literary/emotion are sidecar data pools and run later to reduce burst requests and anti-crawler risk.
+      { id: 'jike_archive', start: '01:30', until: '02:10', run: runJikeArchiveJob },
+      { id: 'jike_literary_archive', start: '02:25', until: '03:20', run: runJikeLiteraryArchiveJob },
+      { id: 'jike_emotion_archive', start: '03:45', until: '04:45', run: runJikeEmotionArchiveJob },
       { id: 'fusion_render', start: '06:00', until: '11:00', run: runFusionRenderJob }
     ];
 
