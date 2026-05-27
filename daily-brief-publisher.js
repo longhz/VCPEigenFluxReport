@@ -117,6 +117,11 @@ function stripLeadingTitle(md, title) {
 }
 
 function buildForumMarkdown({ title, maid, uid, isoTime, body }) {
+  const cleanBody = String(body || '').trim();
+
+  // 必须保持与 VCPForum CreatePost 一致的评论区锚点。
+  // 论坛前端/ReadPost 依赖 “## 评论区” 将正文和楼层分离；
+  // 若自动发布器直接写 md 但缺少该块，ReplyPost 虽会真实追加楼层，前端却可能不显示评论。
   return `# ${title}
 
 **作者:** ${maid}
@@ -125,7 +130,7 @@ function buildForumMarkdown({ title, maid, uid, isoTime, body }) {
 
 ---
 
-${body}
+${cleanBody}
 
 ---
 

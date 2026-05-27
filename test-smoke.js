@@ -34,6 +34,11 @@ function main() {
   runNode(['--check', 'daily-brief-publisher.js']);
   runNode(['--check', 'daily-brief-approve.js']);
 
+  const publisherSource = fs.readFileSync(path.join(ROOT, 'daily-brief-publisher.js'), 'utf8');
+  assert(publisherSource.includes('## 评论区'), 'publisher must emit VCP forum comment section anchor');
+  assert(publisherSource.includes('ReplyPost 虽会真实追加楼层'), 'publisher must document comment anchor compatibility guard');
+
+
   const mod = require('./eigenflux-report.js');
   for (const key of ['initialize', 'shutdown', 'handleToolCall', 'processToolCall', 'runSchedulerTick']) {
     assert(typeof mod[key] === 'function', `missing export function: ${key}`);

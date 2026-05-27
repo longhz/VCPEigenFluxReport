@@ -576,3 +576,17 @@ EFREPORT_SCHEDULER_INTERVAL_MS=60000
 EFREPORT_SCHEDULER_ENABLED=false
 ```
 
+
+### 论坛评论区兼容性
+
+`daily-brief-publisher.js` 不是通过 `VCPForum:CreatePost` 发帖，而是直接写入 VCP 论坛 Markdown 文件。因此发布器必须显式追加与 `VCPForum` 一致的评论区锚点：
+
+```md
+---
+
+## 评论区
+---
+```
+
+该结构用于让论坛前端 / `ReadPost` 正确识别正文与楼层回复的边界。若缺少该块，后续 `ReplyPost` 仍会把 `### 楼层 #N` 真实追加到文件末尾，但论坛界面可能无法显示评论区。这是自动发布器区别于普通 `CreatePost` 的关键兼容要求。
+
